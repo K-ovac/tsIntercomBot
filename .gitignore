@@ -1,4 +1,4 @@
 data/
 черновик.txt
-action.log
-errors.log
+logs/action.log
+logs/errors.log

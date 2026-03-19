@@ -211,19 +211,6 @@ async def select_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await reply_with_keyboard(update, f"❌ Ошибка: не удалось выполнить {action.lower()} на {desc}")
             log_error(f"{action} на {ip} ({desc})")
 
-    # --- Возврат к выбору панели ---
-    search_results = context.user_data.get('search_results')
-    if search_results:
-        keyboard = [[d] for d in search_results.keys()]
-        keyboard.append(["Назад"])
-        await update.message.reply_text(
-            "Выберите адрес панели:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-        )
-        return SELECT_PANEL
-    else:
-        await update.message.reply_text("Введите адрес панели")
-        return SELECT_PANEL
 
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):

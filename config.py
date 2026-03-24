@@ -4,20 +4,19 @@ import os
 
 SELECT_PANEL, SELECT_ACTION, ASK_APARTMENT_LEVEL, ASK_APARTMENT_CALL, ASK_DOOR_CODE = range(5)
 
-ADMINS_FILE = "data/admins.json"
 USERS_FILE = "data/users.json"
 PANELS_FILE = "data/panels.json"
-UNAUTHORIZED_LOG = "unauthorized.log"
+UNAUTHORIZED_LOG = "data/unauthorized.log"
 
 REQUIRED_FILES = [
     "data/bot_token.txt",
     "data/panels.json",
     "data/creds.json",
-    "data/admins.json",
     "data/users.json",
     "data/chat_id.txt"
 ]
 
+PROXY = "socks5://[::1]:10811"
 TOKEN: str = ""
 CHAT_ID: str = ""
 
@@ -48,6 +47,16 @@ PANEL_INFO_FIELDS = [
         }
     },
 ]
+
+DEFAULT_ROLE = "ooo_service"
+
+ROLE_PERMISSIONS = {
+    "admin":       ["all"],
+    "ooo_service": ["all"],
+    "oao_service": [
+        "Открыть основную дверь", "Открыть доп дверь"
+    ],
+}
 
 def load_token_and_chat_id():
     global TOKEN, CHAT_ID

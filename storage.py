@@ -1,31 +1,43 @@
 import json
 import os
 from logger import log_error
-from config import ADMINS_FILE, USERS_FILE, PANELS_FILE
+from config import USERS_FILE, PANELS_FILE
 
-
-# ========= Admins =========
-
-def load_admins() -> list:
-    if os.path.exists(ADMINS_FILE):
-        with open(ADMINS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
-
+USERS_FILE = "data/users.json"
 
 # ========= Users =========
+_users_cache: dict = {}
 
 def load_users() -> dict:
+    global _users_cache
     try:
         with open(USERS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            _users_cache = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        _users_cache = {"admins": [], "roles": {}}
+    return _users_cache
 
 
-def save_users(user_dict: dict):
+def save_users(data: dict):
     with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_dict, f, ensure_ascii=False, indent=4)
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def get_admins() -> list:
+    return _users_cache.get("admins", [])
+
+def is_admin(user_id: str) -> bool:
+    return user_id in get_admins()
+
+def is_allowed(user_id: str) -> bool:
+    return user_id in _users_cache.get("roles", {}) or is_admin(user_id)
+
+def get_user_role(user_id: str) -> str:
+    if is_admin(user_id):
+        return "admin"
+    user = _users_cache.get("roles", {}).get(user_id)
+    if user:
+        return user.get("group", "oao_service")
+    return None
 
 
 # ========= Panels =========
@@ -63,6 +75,5 @@ def load_creds(filename="data/creds.json") -> list[tuple[str, str]]:
 
 
 # Глобальные объекты — инициализируются один раз при импорте
-admins: list = load_admins()
 users: dict = load_users()
 CREDS: list[tuple[str, str]] = load_creds()

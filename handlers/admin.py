@@ -1,7 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from storage import admins, users, save_users, load_panels, save_panels
+from storage import is_admin, load_users, save_users, load_panels, save_panels
 from logger import log_user_action, log_error
 
 
@@ -9,49 +9,57 @@ from logger import log_user_action, log_error
 
 async def adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = str(update.effective_user.id)
-    if admin_id not in admins:
+    if not is_admin(admin_id):
         await update.message.reply_text("Команда доступна только администраторам.")
         return
 
     if len(context.args) < 1:
-        await update.message.reply_text("Использование: /adduser <user_id> [Имя]")
+        await update.message.reply_text("Использование: /adduser <user_id> <group> [Имя]")
         return
 
     new_user_id = context.args[0]
+    group = context.args[1] if len(context.args) > 1 else "oao_service"
+    name = " ".join(context.args[2:]) if len(context.args) > 2 else None
 
-    if len(context.args) > 1:
-        username = " ".join(context.args[1:])
-    else:
+    if not name:
         try:
             chat = await context.bot.get_chat(int(new_user_id))
-            username = chat.full_name
+            name = chat.full_name
         except Exception:
-            username = "Неизвестный пользователь"
+            name = "Неизвестный пользователь"
 
-    if new_user_id in users:
+    data = load_users()
+    if new_user_id in data.get("roles", {}):
         await update.message.reply_text("Пользователь уже есть в списке.")
         return
 
-    users[new_user_id] = username
-    save_users(users)
-    await update.message.reply_text(f"Пользователь {username} ({new_user_id}) добавлен.")
-    log_user_action(update.effective_user, f"Добавил пользователя {username} ({new_user_id})")
+    data.setdefault("roles", {})[new_user_id] = {"name": name, "group": group}
+    save_users(data)
+    await update.message.reply_text(f"Пользователь {name} ({new_user_id}) добавлен в группу {group}.")
+    log_user_action(update.effective_user, f"Добавил пользователя {name} ({new_user_id}) → {group}")
 
 
 async def listusers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _ = context
     user_id = str(update.effective_user.id)
-    if user_id not in admins:
+    if not is_admin(user_id):
         await update.message.reply_text("Команда доступна только администраторам.")
         return
 
-    if not users:
+    data = load_users()
+    roles = data.get("roles", {})
+    admins = data.get("admins", [])
+
+    if not roles and not admins:
         await update.message.reply_text("Список пользователей пуст.")
         return
 
     msg = "Список пользователей:\n"
-    for uid, name in users.items():
-        msg += f"- {name} (ID: {uid})\n"
+    for uid, info in roles.items():
+        is_adm = "👑 " if uid in admins else ""
+        name = info.get("name", "—") if isinstance(info, dict) else info
+        group = info.get("group", "—") if isinstance(info, dict) else "—"
+        msg += f"{is_adm}{name} (ID: {uid}) — {group}\n"
 
     await update.message.reply_text(msg)
     log_user_action(update.effective_user, "Запросил список пользователей")
@@ -59,7 +67,7 @@ async def listusers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def deluser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = str(update.effective_user.id)
-    if admin_id not in admins:
+    if not is_admin(admin_id):
         await update.message.reply_text("Команда доступна только администраторам.")
         return
 
@@ -68,20 +76,25 @@ async def deluser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     target_id = context.args[0]
-    if target_id not in users:
+    data = load_users()
+
+    if target_id not in data.get("roles", {}):
         await update.message.reply_text(f"Пользователь с ID {target_id} не найден.")
         return
 
-    deleted_username = users[target_id]
-    del users[target_id]
-    save_users(users)
-    await update.message.reply_text(f"Пользователь {deleted_username} (ID {target_id}) удалён.")
-    log_user_action(update.effective_user, f"Удалил пользователя {deleted_username} ({target_id})")
+    deleted = data["roles"].pop(target_id)
+    deleted_name = deleted.get("name", target_id) if isinstance(deleted, dict) else deleted
+    if target_id in data.get("admins", []):
+        data["admins"].remove(target_id)
+
+    save_users(data)
+    await update.message.reply_text(f"Пользователь {deleted_name} (ID {target_id}) удалён.")
+    log_user_action(update.effective_user, f"Удалил пользователя {deleted_name} ({target_id})")
 
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_id = str(update.effective_user.id)
-    if admin_id not in admins:
+    if not is_admin(admin_id):
         await update.message.reply_text("Команда доступна только администраторам.")
         return
 
@@ -90,13 +103,15 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Использование: /broadcast <текст сообщения>")
         return
 
+    data = load_users()
     count = 0
-    for user_id, name in users.items():
+    for uid, info in data.get("roles", {}).items():
+        name = info.get("name", uid) if isinstance(info, dict) else info
         try:
-            await context.bot.send_message(chat_id=int(user_id), text=message)
+            await context.bot.send_message(chat_id=int(uid), text=message)
             count += 1
         except Exception as e:
-            log_error(f"Ошибка при отправке {name} ({user_id}): {e}")
+            log_error(f"Ошибка при отправке {name} ({uid}): {e}")
 
     await update.message.reply_text(f"Отправлено уведомление {count} пользователям.")
     log_user_action(update.effective_user, f"Рассылка: '{message}' ({count} получателей)")
@@ -106,7 +121,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def addpanel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    if user_id not in admins:
+    if not is_admin(user_id):
         await update.message.reply_text("Команда доступна только администраторам.")
         return
 
@@ -130,7 +145,7 @@ async def addpanel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def editpanel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    if user_id not in admins:
+    if not is_admin(user_id):
         await update.message.reply_text("Команда доступна только администраторам.")
         return
 
@@ -159,7 +174,7 @@ async def editpanel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def delpanel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    if user_id not in admins:
+    if not is_admin(user_id):
         await update.message.reply_text("Команда доступна только администраторам.")
         return
 

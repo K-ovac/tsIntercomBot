@@ -1,14 +1,14 @@
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
-from config import SELECT_PANEL, SELECT_ACTION, ASK_APARTMENT_LEVEL, ASK_APARTMENT_CALL, ASK_DOOR_CODE
-from storage import admins, users, load_panels
+from config import SELECT_PANEL, SELECT_ACTION, ASK_APARTMENT_LEVEL, ASK_APARTMENT_CALL, ASK_DOOR_CODE, ROLE_PERMISSIONS, DEFAULT_ROLE
+from storage import is_allowed, is_admin, get_user_role, load_panels
 from keyboards import get_action_keyboard, back_keyboard, reply_with_keyboard
 from logger import log_user_action, log_error
 from panel_api import (
     toggle_autolearn, toggle_door_code, open_door,
     set_door_magnet, get_dks_du, get_current_door_code,
-    get_panel_summary
+    get_panel_summary, check_panel
 )
 from handlers.actions import (
     custom_levels, set_common_levels, ask_apartment_status,
@@ -16,11 +16,10 @@ from handlers.actions import (
 )
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update, context):
     user_id = str(update.effective_user.id)
-    context.user_data.clear()
-
-    if user_id in admins or user_id in users:
+    if is_allowed(user_id):
+        context.user_data['role'] = get_user_role(user_id)
         panels = load_panels()
         context.user_data['panels'] = panels
         await update.message.reply_text("Введите адрес панели")
@@ -34,7 +33,6 @@ async def select_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['panels'] = load_panels()
     panels = context.user_data['panels']
     user_id = str(update.effective_user.id)
-
     text = update.message.text.strip()
 
     if text.lower() == "завершить":
@@ -46,7 +44,6 @@ async def select_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop('search_results', None)
         return SELECT_PANEL
 
-    # Если уже есть результаты поиска — выбираем из них
     if 'search_results' in context.user_data:
         search_results = context.user_data['search_results']
         if text in search_results:
@@ -57,16 +54,17 @@ async def select_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await update.message.reply_text("⏳ Получаю данные панели...")
             summary = await get_panel_summary(ip, desc)
-            if user_id in admins:
+            if is_admin(user_id):
                 summary += f"\n🌐 IP: <code>{ip}</code>"
             await update.message.reply_text(summary, parse_mode="HTML")
-            await update.message.reply_text("Выберите действие:", reply_markup=get_action_keyboard())
+
+            role = context.user_data.get('role', DEFAULT_ROLE)
+            await update.message.reply_text("Выберите действие:", reply_markup=get_action_keyboard(role))
             return SELECT_ACTION
         else:
             await update.message.reply_text("Нажмите на одну из кнопок ниже или 'Назад'.")
             return SELECT_PANEL
 
-    # Поиск по адресу
     user_input = text.lower()
     matches = [(ip, addr) for ip, addr in panels.items() if user_input in addr.lower()]
 
@@ -88,6 +86,7 @@ async def select_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = update.message.text.strip()
     ip = context.user_data.get('selected_ip')
     desc = context.user_data.get('selected_desc')
+    role = context.user_data.get('role', DEFAULT_ROLE)
 
     # --- Назад ---
     if action == "Назад":
@@ -164,8 +163,16 @@ async def select_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Панель не выбрана. Введите адрес панели.")
         return SELECT_PANEL
 
-    # --- Одиночные действия ---
+    # --- Проверка прав ---
+    allowed = ROLE_PERMISSIONS.get(role, [])
+    if "all" not in allowed and action not in allowed:
+        await update.message.reply_text("⛔ Недостаточно прав.")
+        await update.message.reply_text("Выберите действие:", reply_markup=get_action_keyboard(role))
+        return SELECT_ACTION
+
+    # --- Выполнение действия ---
     success = None
+    show_keyboard = True  # показывать клавиатуру в конце
 
     if "Включить" in action:
         success = await toggle_autolearn(ip, True)
@@ -178,39 +185,41 @@ async def select_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "Деактив код открытия" in action:
         success = await toggle_door_code(ip, False)
     elif action == "Открыть основную дверь":
-        return await open_door(ip, "maindoor", desc, update)
+        await open_door(ip, "maindoor", desc, update)
     elif action == "Открыть доп дверь":
-        return await open_door(ip, "altdoor", desc, update)
+        await open_door(ip, "altdoor", desc, update)
     elif action == "Адресация ККМ":
-        result = await get_dks_du(ip=ip, desc=desc, update=update)
-        if result is None:
-            await update.message.reply_text(
-                "❌ Не удалось выгрузить адресацию ККМ. Нажмите 'Назад' и попробуйте снова."
-            )
-        return SELECT_ACTION
+        await get_dks_du(ip=ip, desc=desc, update=update)
     elif "Ping" in action:
-        return await check_panel_handler(update, context)
+        panel_status = await check_panel(ip)
+        await update.message.reply_text(f"{desc}: {panel_status}")
+        log_user_action(update.effective_user, f"Ping на {ip} ({desc}) — {panel_status}")
     elif action == "Вкл. магнит осн. двери":
-        return await set_door_magnet(ip, "MainDoorOpenMode", "off", desc, update)
+        await set_door_magnet(ip, "MainDoorOpenMode", "off", desc, update)
     elif action == "Выкл. магнит осн. двери":
-        return await set_door_magnet(ip, "MainDoorOpenMode", "on", desc, update)
+        await set_door_magnet(ip, "MainDoorOpenMode", "on", desc, update)
     elif action == "Вкл. магнит доп. двери":
-        return await set_door_magnet(ip, "AltDoorOpenMode", "off", desc, update)
+        await set_door_magnet(ip, "AltDoorOpenMode", "off", desc, update)
     elif action == "Выкл. магнит доп. двери":
-        return await set_door_magnet(ip, "AltDoorOpenMode", "on", desc, update)
+        await set_door_magnet(ip, "AltDoorOpenMode", "on", desc, update)
     else:
         await update.message.reply_text("Неизвестное действие.")
-        return SELECT_ACTION
+        show_keyboard = False
 
-    # --- Результат для включения/выключения ---
+    # --- Результат для toggle-действий ---
     if success is not None:
         if success:
-            await reply_with_keyboard(update, f"✅ Успешно: {action.lower()} на {desc}")
+            await update.message.reply_text(f"✅ Успешно: {action.lower()} на {desc}")
             log_user_action(update.effective_user, f"{action} на {ip} ({desc})")
         else:
-            await reply_with_keyboard(update, f"❌ Ошибка: не удалось выполнить {action.lower()} на {desc}")
+            await update.message.reply_text(f"❌ Ошибка: не удалось выполнить {action.lower()} на {desc}")
             log_error(f"{action} на {ip} ({desc})")
 
+    # --- Клавиатура с правильной ролью — всегда в одном месте ---
+    if show_keyboard:
+        await update.message.reply_text("Выберите действие:", reply_markup=get_action_keyboard(role))
+
+    return SELECT_ACTION
 
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):

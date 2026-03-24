@@ -10,7 +10,6 @@ from reportlab.lib import colors
 
 from storage import CREDS
 from logger import log_error, log_user_action
-from keyboards import get_action_keyboard, reply_with_keyboard
 from config import SELECT_ACTION
 
 
@@ -77,7 +76,6 @@ async def get_panel_summary(ip: str, desc: str) -> str:
     online_icon = "🟢" if online == "Панель доступна" else "🔴"
     lines = [f"📋 <b>{desc}</b>", f"{online_icon} Статус: {online}"]
 
-    # если панель недоступна — дальше не идём
     if online != "Панель доступна":
         return "\n".join(lines)
 
@@ -111,7 +109,7 @@ async def get_panel_summary(ip: str, desc: str) -> str:
 
 # ========= Open door =========
 
-async def open_door(ip: str, door: str, desc: str, update) -> int:
+async def open_door(ip: str, door: str, desc: str, update) -> bool:
     url = f"http://{ip}/cgi-bin/intercom_cgi?action={door}"
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
         for login, password in CREDS:
@@ -122,19 +120,19 @@ async def open_door(ip: str, door: str, desc: str, update) -> int:
                     print(f"Запрос: {url} | Код: {resp.status} | Ответ: {text}")
                     if resp.status == 200:
                         label = "основная" if door == "maindoor" else "доп"
-                        await reply_with_keyboard(update, f"✅Дверь {label} на панели {desc} открыта")
+                        await update.message.reply_text(f"✅ Дверь {label} на панели {desc} открыта")
                         log_user_action(update.effective_user, f"Открытие '{door}' на {ip} ({desc})")
-                        return SELECT_ACTION
+                        return True
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 log_error(f"Ошибка открытия двери '{door}' {ip} ({desc}): {e}")
 
-    await reply_with_keyboard(update, f"❌Не удалось открыть дверь {door} на панели {desc}")
-    return SELECT_ACTION
+    await update.message.reply_text(f"❌ Не удалось открыть дверь на панели {desc}")
+    return False
 
 
 # ========= Door magnet =========
 
-async def set_door_magnet(ip: str, door_type: str, state: str, desc: str, update) -> int:
+async def set_door_magnet(ip: str, door_type: str, state: str, desc: str, update) -> bool:
     url = f"http://{ip}/cgi-bin/intercom_cgi?action=set&{door_type}={state}"
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
         for login, password in CREDS:
@@ -146,16 +144,17 @@ async def set_door_magnet(ip: str, door_type: str, state: str, desc: str, update
                     if resp.status == 200:
                         action_label = "включён" if state == "off" else "выключен"
                         door_label = "основной" if door_type == "MainDoorOpenMode" else "доп"
-                        msg = f"✅Магнит двери {door_label} на панели {desc} {action_label}"
-                        await reply_with_keyboard(update, msg)
+                        await update.message.reply_text(
+                            f"✅ Магнит двери {door_label} на панели {desc} {action_label}"
+                        )
                         log_user_action(update.effective_user,
                                         f"Управление магнитом '{door_type}' на {ip} ({desc}) - {state}")
-                        return SELECT_ACTION
+                        return True
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 log_error(f"Ошибка управления магнитом '{door_type}' {ip} ({desc}): {e}")
 
-    await reply_with_keyboard(update, f"❌Не удалось изменить состояние магнита {door_type} на панели {desc}")
-    return SELECT_ACTION
+    await update.message.reply_text(f"❌ Не удалось изменить состояние магнита на панели {desc}")
+    return False
 
 
 # ========= Generic poll =========
@@ -190,7 +189,7 @@ async def measure_linelevel(ip: str, apt: int) -> int | None:
 
 # ========= KKM addressing =========
 
-async def get_dks_du(ip: str, desc: str, update) -> int | None:
+async def get_dks_du(ip: str, desc: str, update) -> bool:
     url = f"http://{ip}/cgi-bin/intercomdu_cgi?action=export"
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
         for login, password in CREDS:
@@ -235,8 +234,8 @@ async def get_dks_du(ip: str, desc: str, update) -> int | None:
                         elements.append(PageBreak())
 
                     if not elements:
-                        await reply_with_keyboard(update, f"❌ Не удалось получить таблицы с панели {desc}.")
-                        return None
+                        await update.message.reply_text(f"❌ Не удалось получить таблицы с панели {desc}.")
+                        return False
 
                     doc.build(elements)
                     buffer.seek(0)
@@ -247,14 +246,13 @@ async def get_dks_du(ip: str, desc: str, update) -> int | None:
                         caption=f"📄 Адресация ККМ с панели {desc}"
                     )
                     log_user_action(update.effective_user, f"Выгрузка адресации ККМ (PDF) на {ip} ({desc})")
-                    await reply_with_keyboard(update, "Выберите действие:")
-                    return SELECT_ACTION
+                    return True
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 log_error(f"Ошибка выгрузки CSV с панели {ip} ({desc}), login={login}: {e}")
 
-    await reply_with_keyboard(update, f"❌ Не удалось выгрузить адресацию ККМ на панели {desc}.")
-    return None
+    await update.message.reply_text(f"❌ Не удалось выгрузить адресацию ККМ на панели {desc}.")
+    return False
 
 
 # ========= Ping / availability check =========

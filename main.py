@@ -1,4 +1,7 @@
 # main.py
+from telegram import Update
+
+
 import config
 
 from telegram.ext import (
@@ -23,6 +26,11 @@ def main():
     load_token_and_chat_id()
     setup_loggers()
 
+    # только один раз, с прокси
+    # builder = ApplicationBuilder().token(config.TOKEN)
+    # if config.PROXY:
+    #     builder = builder.proxy(config.PROXY).get_updates_proxy(config.PROXY)
+    # app = builder.build()
     app = ApplicationBuilder().token(config.TOKEN).build()
 
     conv_handler = ConversationHandler(
@@ -67,8 +75,8 @@ def main():
     app.add_handler(CommandHandler("status", status))
 
     print("Бот запущен.")
+    # app.run_polling(allowed_updates=Update.ALL_TYPES)
     app.run_polling()
-
 
 if __name__ == '__main__':
     main()
